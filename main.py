@@ -2,11 +2,10 @@ import feedparser
 import os
 import requests
 import smtplib
-import google.generativeai as genai
+from google import genai # 최신 SDK 임포트 방식
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# 1. 뉴스 수집 (주요 외신 RSS)
 def fetch_news():
     RSS_FEEDS = {
         "CNBC_Biz": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
@@ -17,14 +16,13 @@ def fetch_news():
     news_list = []
     for source, url in RSS_FEEDS.items():
         feed = feedparser.parse(url)
-        for entry in feed.entries[:1]: # 매체별 최신 기사 1개씩
+        for entry in feed.entries[:1]:
             news_list.append({"source": source, "title": entry.title, "link": entry.link})
     return news_list
 
-# 2. AI 분석 (Gemini 1.5 Flash 모델 활용)
 def analyze_news(news_data):
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 최신 SDK 클라이언트 생성
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     
     prompt = f"""
     당신은 전문 영어 학습 큐레이터입니다. 아래 뉴스 데이터를 바탕으로 한글 요약과 영어 학습 자료를 만드세요.
@@ -37,10 +35,14 @@ def analyze_news(news_data):
 
     뉴스 데이터: {news_data}
     """
-    response = model.generate_content(prompt)
+    
+    # 모델 호출 방식 변경 (gemini-2.0-flash 권장)
+    response = client.models.generate_content(
+        model="gemini-2.0-flash", 
+        contents=prompt
+    )
     return response.text
 
-# 3. 텔레그램 발송
 def send_telegram(content):
     token = os.environ["TELEGRAM_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
@@ -51,11 +53,10 @@ def send_telegram(content):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-# 4. 이메일 발송
 def send_email(content):
     sender = os.environ["EMAIL_USER"]
     password = os.environ["EMAIL_PASS"]
-    receiver = sender # 본인에게 발송
+    receiver = sender
 
     msg = MIMEMultipart()
     msg['From'] = sender
@@ -71,7 +72,6 @@ def send_email(content):
         print(f"Email Error: {e}")
 
 if __name__ == "__main__":
-    # 실행 흐름: 수집 -> 분석 -> 발송
     news = fetch_news()
     if news:
         result = analyze_news(news)
