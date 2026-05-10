@@ -2,8 +2,13 @@ name: Daily English News Agent
 
 on:
   schedule:
+    # 한국 시간 기준 오전 8:00 (UTC 23:00)
     - cron: '0 23 * * *' 
   workflow_dispatch: 
+
+# 전역 환경 변수 설정 (Node.js 24 강제 사용)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run_agent:
