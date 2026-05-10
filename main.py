@@ -6,11 +6,19 @@ from google import genai
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+def get_env_or_raise(key):
+    """환경변수가 없으면 즉시 에러를 발생시켜 프로세스를 중단합니다."""
+    value = os.environ.get(key, "").strip()
+    # 공백 제거 후 16자리(이메일) 또는 긴 문자열(API) 확인
+    clean_value = "".join(value.split())
+    if not clean_value:
+        raise ValueError(f"GitHub Secret [{key}] is MISSING or EMPTY!")
+    return clean_value
+
 def fetch_news():
     RSS_FEEDS = {
         "CNBC": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
-        "BBC": "http://feeds.bbci.co.uk/news/world/rss.xml",
-        "NYT": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml"
+        "BBC": "http://feeds.bbci.co.uk/news/world/rss.xml"
     }
     news_list = []
     for source, url in RSS_FEEDS.items():
@@ -21,64 +29,57 @@ def fetch_news():
         except: continue
     return news_list
 
-def analyze_news(news_data):
-    # 공백 제거 및 API 키 로드
-    api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
-    if not api_key: return "Error: API Key Missing"
-    
+def analyze_news(news_data, api_key):
     try:
-        # [핵심] 404 에러 해결을 위해 api_version을 v1beta로 강제 지정합니다.
-        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
-        
+        client = genai.Client(api_key=api_key)
+        # 404가 계속 나면 모델명을 'gemini-1.5-pro'로 바꿔서 테스트해 볼 가치가 있습니다.
         response = client.models.generate_content(
             model="gemini-1.5-flash",
-            contents=f"Summarize these news in Korean and pick 3 English expressions with examples: {news_data}"
+            contents=f"Summarize in Korean: {news_data}"
         )
         return response.text
     except Exception as e:
         return f"AI_ERROR: {str(e)}"
 
-def send_telegram(content):
-    token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
-    chat_id = "".join(os.environ.get("TELEGRAM_CHAT_ID", "").split())
-    if not token or not chat_id: return
-    
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    # 특수문자 충돌 방지를 위해 Markdown 대신 일반 텍스트로 안전하게 발송합니다.
-    payload = {"chat_id": chat_id, "text": content}
-    try:
-        requests.post(url, json=payload)
-    except: pass
-
-def send_email(content):
-    user = "".join(os.environ.get("EMAIL_USER", "").split())
-    password = "".join(os.environ.get("EMAIL_PASS", "").split())
-    if not user or not password: return
-
+def send_email(content, user, password):
     msg = MIMEMultipart()
     msg['From'] = user
     msg['To'] = user
-    msg['Subject'] = "[News Agent] Today's English News Digest"
+    msg['Subject'] = "[Success] News Agent Report"
     msg.attach(MIMEText(content, 'plain'))
 
     try:
-        # 이전 실행에서 성공한 587 포트/TLS 방식을 유지합니다.
+        # TLS 587 포트가 가장 범용적입니다.
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, password)
         server.sendmail(user, user, msg.as_string())
         server.quit()
-        print("Success: Email sent!")
+        print("Email Sent Successfully!")
     except Exception as e:
-        print(f"Fail: Email error {e}")
+        print(f"Email Final Fail: {e}")
 
 if __name__ == "__main__":
-    news = fetch_news()
-    if news:
-        print(f"Found {len(news)} news items. Analyzing...")
-        report = analyze_news(news)
-        print(f"--- AI Report ---\n{report[:100]}...")
-        send_telegram(report)
-        send_email(report)
-    else:
-        print("No news found.")
+    try:
+        # 실행 시작 전 모든 자격 증명 강제 검증
+        api_key = get_env_or_raise("GEMINI_API_KEY")
+        tg_token = get_env_or_raise("TELEGRAM_TOKEN")
+        tg_id = get_env_or_raise("TELEGRAM_CHAT_ID")
+        mail_user = get_env_or_raise("EMAIL_USER")
+        mail_pass = get_env_or_raise("EMAIL_PASS")
+
+        news = fetch_news()
+        if news:
+            report = analyze_news(news, api_key)
+            print(f"Report: {report[:50]}...")
+            
+            # 텔레그램 발송
+            requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", 
+                          json={"chat_id": tg_id, "text": report})
+            
+            # 이메일 발송
+            send_email(report, mail_user, mail_pass)
+            
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] {e}")
+        exit(1) # GitHub Actions에서 실패로 표시되게 함
