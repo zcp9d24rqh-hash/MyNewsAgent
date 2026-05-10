@@ -21,38 +21,45 @@ def fetch_news():
     return "\n".join(news_list)
 
 def analyze_news(news_text):
-    # API 키 로드 및 공백 제거
     api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
     if not api_key: return "ERROR: API KEY IS EMPTY"
 
-    # v1 정식 엔드포인트 사용
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
-    
-    headers = {'Content-Type': 'application/json'}
-    # v1 규격에 맞춘 페이로드 구조
-    payload = {
-        "contents": [{
-            "parts": [{
-                "text": f"다음 뉴스를 한글로 요약하고 영어 표현 3개를 정리해줘:\n\n{news_text}"
-            }]
-        }],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 800
-        }
-    }
-
+    # 1. 사용 가능한 모델 목록 가져오기 (디스커버리 로직)
+    list_url = f"https://generativelanguage.googleapis.com/v1/models?key={api_key}"
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=20)
+        model_list_res = requests.get(list_url)
+        models_data = model_list_res.json()
         
+        # 호출 가능한 'gemini' 모델 찾기
+        available_models = [m['name'] for m in models_data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
+        print(f"--- Available Models: {available_models} ---")
+        
+        if not available_models:
+            return f"ERROR: No available Gemini models found for this key. (Check AI Studio Project)"
+        
+        # 1.5 flash -> 2.0 flash -> 1.0 pro 순서로 우선순위 검색
+        selected_model = ""
+        for m in ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "models/gemini-1.5-pro"]:
+            if m in available_models:
+                selected_model = m
+                break
+        
+        if not selected_model: selected_model = available_models[0] # 아무거나 첫 번째 모델 선택
+        
+        print(f"Selected Model: {selected_model}")
+        
+        # 2. 선택된 모델로 분석 요청
+        gen_url = f"https://generativelanguage.googleapis.com/v1/{selected_model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": f"뉴스 요약 및 영어표현 3개 정리해줘:\n{news_text}"}]}]
+        }
+        
+        response = requests.post(gen_url, json=payload, timeout=20)
         if response.status_code == 200:
-            result = response.json()
-            return result['candidates'][0]['content']['parts'][0]['text']
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            # 400/404 발생 시 서버가 보내는 상세 이유를 출력합니다.
-            error_detail = response.json().get('error', {})
-            return f"AI_API_ERROR: {response.status_code} | Message: {error_detail.get('message')} | Status: {error_detail.get('status')}"
-            
+            return f"AI_API_ERROR: {response.status_code} - {response.text}"
+
     except Exception as e:
         return f"SYSTEM_ERROR: {str(e)}"
 
@@ -60,22 +67,16 @@ def send_telegram(content):
     token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
     chat_id = "".join(os.environ.get("TELEGRAM_CHAT_ID", "").split())
     if not token or not chat_id: return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        requests.post(url, json={"chat_id": chat_id, "text": content})
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": content})
     except: pass
 
 def send_email(content):
     user = "".join(os.environ.get("EMAIL_USER", "").split())
     password = "".join(os.environ.get("EMAIL_PASS", "").split())
-    if not user or not password: return
-
     msg = MIMEMultipart()
-    msg['From'] = user
-    msg['To'] = user
-    msg['Subject'] = "[News Agent] 오늘의 영어 뉴스 요약"
+    msg['From'], msg['To'], msg['Subject'] = user, user, "[News Agent] Today's Study"
     msg.attach(MIMEText(content, 'plain'))
-
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -83,15 +84,16 @@ def send_email(content):
         server.sendmail(user, user, msg.as_string())
         server.quit()
         print("Success: Email Sent!")
-    except Exception as e:
-        print(f"Email Error: {e}")
+    except Exception as e: print(f"Email Error: {e}")
 
 if __name__ == "__main__":
     news_data = fetch_news()
     if news_data:
         report = analyze_news(news_data)
-        print(f"--- Analysis Status ---\n{report[:200]}...") # 에러 메시지 확인용
-        send_telegram(report)
-        send_email(report)
-    else:
-        print("No news found.")
+        print(f"Report Result: {report[:100]}...")
+        if "ERROR" not in report: # 에러가 아닐 때만 발송
+            send_telegram(report)
+            send_email(report)
+        else:
+            print("Skipping send due to AI error.")
+            send_email(f"AI 분석 실패 로그:\n{report}") # 실패 원인을 메일로 전송
