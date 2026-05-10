@@ -9,8 +9,7 @@ from email.mime.multipart import MIMEMultipart
 def fetch_news():
     RSS_FEEDS = {
         "CNBC": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
-        "BBC": "http://feeds.bbci.co.uk/news/world/rss.xml",
-        "NYT": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml"
+        "BBC": "http://feeds.bbci.co.uk/news/world/rss.xml"
     }
     news_list = []
     for source, url in RSS_FEEDS.items():
@@ -22,36 +21,37 @@ def fetch_news():
     return "\n".join(news_list)
 
 def analyze_news(news_text):
-    api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
-    if not api_key: return "Error: API Key Missing"
+    # 공백 제거 및 환경변수 로드
+    raw_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key = "".join(raw_key.split())
     
-    genai.configure(api_key=api_key)
-    
-    # 시도해볼 모델 리스트 (우선순위 순)
-    model_candidates = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-pro']
-    
-    last_error = ""
-    for model_name in model_candidates:
-        try:
-            print(f"Attempting with model: {model_name}...")
-            model = genai.GenerativeModel(model_name)
-            prompt = f"다음 뉴스 리스트를 한글로 요약하고 관련 영어 표현 3개를 정리해줘:\n\n{news_text}"
-            response = model.generate_content(prompt)
-            
-            if response and response.text:
-                print(f"Success with model: {model_name}")
-                return response.text
-        except Exception as e:
-            last_error = str(e)
-            print(f"Model {model_name} failed: {last_error}")
-            continue
-            
-    return f"AI_ERROR: All models failed. Last error: {last_error}"
+    if not api_key: return "ERROR: API KEY IS EMPTY"
+
+    try:
+        # [핵심 수정] API 버전을 v1으로 강제 지정하여 v1beta 404 이슈 해결
+        genai.configure(api_key=api_key, transport='rest')
+        
+        # 모델 객체 생성 (접두사 없이 이름만 사용)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"Summarize these news in Korean and pick 3 English expressions:\n\n{news_text}"
+        
+        # 콘텐츠 생성 시도
+        response = model.generate_content(prompt)
+        
+        if response.text:
+            return response.text
+        return "ERROR: AI Response is empty."
+        
+    except Exception as e:
+        # 에러 발생 시 상세 메시지 반환
+        return f"AI_ERROR_DETAIL: {str(e)}"
 
 def send_telegram(content):
     token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
     chat_id = "".join(os.environ.get("TELEGRAM_CHAT_ID", "").split())
     if not token or not chat_id: return
+    
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         requests.post(url, json={"chat_id": chat_id, "text": content})
@@ -69,22 +69,21 @@ def send_email(content):
     msg.attach(MIMEText(content, 'plain'))
 
     try:
-        # 이전에 성공한 TLS 587 포트 설정을 유지
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, password)
         server.sendmail(user, user, msg.as_string())
         server.quit()
-        print("Success: Email sent!")
+        print("Final Success: Email Sent!")
     except Exception as e:
-        print(f"Fail: Email error {e}")
+        print(f"Final Fail: Email error {e}")
 
 if __name__ == "__main__":
     news_data = fetch_news()
     if news_data:
         report = analyze_news(news_data)
-        print(f"Final Report Sample: {report[:100]}")
+        print(f"Generated Content: {report[:100]}...")
         send_telegram(report)
         send_email(report)
     else:
-        print("No news found.")
+        print("No news entries found.")
