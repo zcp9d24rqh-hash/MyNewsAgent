@@ -23,38 +23,42 @@ def fetch_news():
 def analyze_news(news_data):
     # 공백 제거 및 키 로드
     api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
-    if not api_key: return "Error: Gemini API Key is missing."
-    
-    try:
-        # 클라이언트 초기화 시 vertex_ai=False를 명시하여 일반 API 모드로 고정
-        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
-        
-        # 모델 명칭을 리스트 형태로 시도 (가장 호환성 높은 명칭)
-        model_name = "gemini-1.5-flash"
-        
-        response = client.models.generate_content(
-            model=model_name,
-            contents=f"Summarize these news in Korean and pick 3 English expressions: {news_data}"
-        )
-        
-        if not response or not response.text:
-            return "Error: AI generated an empty response."
-        return response.text
+    if not api_key:
+        return "Error: API Key is missing."
 
+    client = genai.Client(api_key=api_key)
+
+    try:
+        # [진단] 사용 가능한 모델 목록을 확인하여 로그에 남깁니다.
+        print("--- Available Models List ---")
+        models = client.models.list()
+        available_model_names = [m.name for m in models]
+        for name in available_model_names:
+            print(f"- {name}")
+        
+        # 목록에 있는 모델 중 하나를 선택 (없으면 기본값 사용)
+        target_model = "gemini-1.5-flash"
+        if f"models/{target_model}" in available_model_names:
+            target_model = f"models/{target_model}"
+        elif "gemini-1.5-flash-latest" in available_model_names:
+            target_model = "gemini-1.5-flash-latest"
+
+        print(f"Using model: {target_model}")
+
+        response = client.models.generate_content(
+            model=target_model,
+            contents=f"다음 뉴스를 한글로 요약하고 영어 표현 3개를 뽑아줘: {news_data}"
+        )
+        return response.text
     except Exception as e:
-        # 상세 에러 로그 출력
-        error_msg = str(e)
-        print(f"Detailed AI Error: {error_msg}")
-        return f"AI Analysis Failed: {error_msg}\n(Check if your API Key has access to {model_name})"
+        return f"AI_ERROR: {str(e)}"
 
 def send_telegram(content):
     token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
     chat_id = "".join(os.environ.get("TELEGRAM_CHAT_ID", "").split())
     if not token or not chat_id: return
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, json={"chat_id": chat_id, "text": content})
-    except: pass
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    requests.post(url, json={"chat_id": chat_id, "text": content})
 
 def send_email(content):
     user = "".join(os.environ.get("EMAIL_USER", "").split())
@@ -64,23 +68,25 @@ def send_email(content):
     msg = MIMEMultipart()
     msg['From'] = user
     msg['To'] = user
-    msg['Subject'] = "[News Agent] Today's Study"
+    msg['Subject'] = "[News Agent] Daily English Study"
     msg.attach(MIMEText(content, 'plain'))
 
     try:
-        # TLS 587 포트가 자동화 환경에서 가장 안정적입니다.
+        # TLS 587 포트가 자동화 환경에서 보안 연결에 더 유리합니다.
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, password)
         server.sendmail(user, user, msg.as_string())
         server.quit()
+        print("Success: Email sent!")
     except Exception as e:
-        print(f"Email Error: {e}")
+        print(f"Fail: Email error {e}")
 
 if __name__ == "__main__":
-    news_data = fetch_news()
-    if news_data:
-        report = analyze_news(news_data)
+    news = fetch_news()
+    if news:
+        report = analyze_news(news)
+        print(f"Final Report Sample: {report[:100]}")
         send_telegram(report)
         send_email(report)
     else:
