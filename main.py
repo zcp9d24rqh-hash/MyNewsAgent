@@ -2,7 +2,7 @@ import feedparser
 import os
 import requests
 import smtplib
-import google.generativeai as genai
+import json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -21,31 +21,33 @@ def fetch_news():
     return "\n".join(news_list)
 
 def analyze_news(news_text):
-    # 공백 제거 및 환경변수 로드
-    raw_key = os.environ.get("GEMINI_API_KEY", "")
-    api_key = "".join(raw_key.split())
-    
+    # API 키에서 공백 제거
+    api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
     if not api_key: return "ERROR: API KEY IS EMPTY"
 
+    # SDK 대신 직접 REST API URL 사용 (v1 버전 강제)
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": f"다음 뉴스를 한글로 요약하고 영어 표현 3개를 정리해줘:\n\n{news_text}"
+            }]
+        }]
+    }
+
     try:
-        # [핵심 수정] API 버전을 v1으로 강제 지정하여 v1beta 404 이슈 해결
-        genai.configure(api_key=api_key, transport='rest')
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        result = response.json()
         
-        # 모델 객체 생성 (접두사 없이 이름만 사용)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = f"Summarize these news in Korean and pick 3 English expressions:\n\n{news_text}"
-        
-        # 콘텐츠 생성 시도
-        response = model.generate_content(prompt)
-        
-        if response.text:
-            return response.text
-        return "ERROR: AI Response is empty."
-        
+        # 정상 응답 처리
+        if response.status_code == 200:
+            return result['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"AI_API_ERROR: {response.status_code} - {result.get('error', {}).get('message', 'Unknown Error')}"
     except Exception as e:
-        # 에러 발생 시 상세 메시지 반환
-        return f"AI_ERROR_DETAIL: {str(e)}"
+        return f"REQUEST_ERROR: {str(e)}"
 
 def send_telegram(content):
     token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
@@ -65,7 +67,7 @@ def send_email(content):
     msg = MIMEMultipart()
     msg['From'] = user
     msg['To'] = user
-    msg['Subject'] = "[News Agent] Today's English Digest"
+    msg['Subject'] = "[Daily News] 오늘의 영어 뉴스 요약"
     msg.attach(MIMEText(content, 'plain'))
 
     try:
@@ -74,16 +76,16 @@ def send_email(content):
         server.login(user, password)
         server.sendmail(user, user, msg.as_string())
         server.quit()
-        print("Final Success: Email Sent!")
+        print("Success: Email Sent!")
     except Exception as e:
-        print(f"Final Fail: Email error {e}")
+        print(f"Email Error: {e}")
 
 if __name__ == "__main__":
     news_data = fetch_news()
     if news_data:
         report = analyze_news(news_data)
-        print(f"Generated Content: {report[:100]}...")
+        print(f"Result: {report[:100]}...")
         send_telegram(report)
         send_email(report)
     else:
-        print("No news entries found.")
+        print("No news found.")
