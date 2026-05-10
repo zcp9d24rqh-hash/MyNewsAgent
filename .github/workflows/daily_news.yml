@@ -2,6 +2,7 @@ name: Daily English News Agent
 
 on:
   schedule:
+    # 한국 시간 기준 오전 8:00 (UTC 23:00)
     - cron: '0 23 * * *' 
   workflow_dispatch: 
 
@@ -15,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5 
         with:
-          python-version: '3.11' # 3.9에서 3.11로 업그레이드
+          python-version: '3.11'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
