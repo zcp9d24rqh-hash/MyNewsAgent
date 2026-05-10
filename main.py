@@ -25,23 +25,37 @@ def analyze_news(news_text):
     api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
     if not api_key: return "Error: API Key Missing"
     
-    try:
-        # 가장 안정적인 레거시 설정 방식 사용
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = f"다음 뉴스 리스트를 한글로 요약하고 관련 영어 표현 3개를 정리해줘:\n\n{news_text}"
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"AI_ERROR: {str(e)}"
+    genai.configure(api_key=api_key)
+    
+    # 시도해볼 모델 리스트 (우선순위 순)
+    model_candidates = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-pro']
+    
+    last_error = ""
+    for model_name in model_candidates:
+        try:
+            print(f"Attempting with model: {model_name}...")
+            model = genai.GenerativeModel(model_name)
+            prompt = f"다음 뉴스 리스트를 한글로 요약하고 관련 영어 표현 3개를 정리해줘:\n\n{news_text}"
+            response = model.generate_content(prompt)
+            
+            if response and response.text:
+                print(f"Success with model: {model_name}")
+                return response.text
+        except Exception as e:
+            last_error = str(e)
+            print(f"Model {model_name} failed: {last_error}")
+            continue
+            
+    return f"AI_ERROR: All models failed. Last error: {last_error}"
 
 def send_telegram(content):
     token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
     chat_id = "".join(os.environ.get("TELEGRAM_CHAT_ID", "").split())
     if not token or not chat_id: return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": content})
+    try:
+        requests.post(url, json={"chat_id": chat_id, "text": content})
+    except: pass
 
 def send_email(content):
     user = "".join(os.environ.get("EMAIL_USER", "").split())
@@ -55,7 +69,7 @@ def send_email(content):
     msg.attach(MIMEText(content, 'plain'))
 
     try:
-        # 이미 성공한 587 포트 설정을 유지합니다.
+        # 이전에 성공한 TLS 587 포트 설정을 유지
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, password)
@@ -69,7 +83,7 @@ if __name__ == "__main__":
     news_data = fetch_news()
     if news_data:
         report = analyze_news(news_data)
-        print(f"Report Generated: {report[:50]}...")
+        print(f"Final Report Sample: {report[:100]}")
         send_telegram(report)
         send_email(report)
     else:
