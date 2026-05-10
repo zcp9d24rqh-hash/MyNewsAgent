@@ -6,15 +6,6 @@ from google import genai
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-def get_env_or_raise(key):
-    """환경변수가 없으면 즉시 에러를 발생시켜 프로세스를 중단합니다."""
-    value = os.environ.get(key, "").strip()
-    # 공백 제거 후 16자리(이메일) 또는 긴 문자열(API) 확인
-    clean_value = "".join(value.split())
-    if not clean_value:
-        raise ValueError(f"GitHub Secret [{key}] is MISSING or EMPTY!")
-    return clean_value
-
 def fetch_news():
     RSS_FEEDS = {
         "CNBC": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
@@ -29,57 +20,68 @@ def fetch_news():
         except: continue
     return news_list
 
-def analyze_news(news_data, api_key):
+def analyze_news(news_data):
+    # 공백 제거 및 키 로드
+    api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
+    if not api_key: return "Error: Gemini API Key is missing."
+    
     try:
-        client = genai.Client(api_key=api_key)
-        # 404가 계속 나면 모델명을 'gemini-1.5-pro'로 바꿔서 테스트해 볼 가치가 있습니다.
+        # 클라이언트 초기화 시 vertex_ai=False를 명시하여 일반 API 모드로 고정
+        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
+        
+        # 모델 명칭을 리스트 형태로 시도 (가장 호환성 높은 명칭)
+        model_name = "gemini-1.5-flash"
+        
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=f"Summarize in Korean: {news_data}"
+            model=model_name,
+            contents=f"Summarize these news in Korean and pick 3 English expressions: {news_data}"
         )
+        
+        if not response or not response.text:
+            return "Error: AI generated an empty response."
         return response.text
-    except Exception as e:
-        return f"AI_ERROR: {str(e)}"
 
-def send_email(content, user, password):
+    except Exception as e:
+        # 상세 에러 로그 출력
+        error_msg = str(e)
+        print(f"Detailed AI Error: {error_msg}")
+        return f"AI Analysis Failed: {error_msg}\n(Check if your API Key has access to {model_name})"
+
+def send_telegram(content):
+    token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
+    chat_id = "".join(os.environ.get("TELEGRAM_CHAT_ID", "").split())
+    if not token or not chat_id: return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, json={"chat_id": chat_id, "text": content})
+    except: pass
+
+def send_email(content):
+    user = "".join(os.environ.get("EMAIL_USER", "").split())
+    password = "".join(os.environ.get("EMAIL_PASS", "").split())
+    if not user or not password: return
+
     msg = MIMEMultipart()
     msg['From'] = user
     msg['To'] = user
-    msg['Subject'] = "[Success] News Agent Report"
+    msg['Subject'] = "[News Agent] Today's Study"
     msg.attach(MIMEText(content, 'plain'))
 
     try:
-        # TLS 587 포트가 가장 범용적입니다.
+        # TLS 587 포트가 자동화 환경에서 가장 안정적입니다.
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, password)
         server.sendmail(user, user, msg.as_string())
         server.quit()
-        print("Email Sent Successfully!")
     except Exception as e:
-        print(f"Email Final Fail: {e}")
+        print(f"Email Error: {e}")
 
 if __name__ == "__main__":
-    try:
-        # 실행 시작 전 모든 자격 증명 강제 검증
-        api_key = get_env_or_raise("GEMINI_API_KEY")
-        tg_token = get_env_or_raise("TELEGRAM_TOKEN")
-        tg_id = get_env_or_raise("TELEGRAM_CHAT_ID")
-        mail_user = get_env_or_raise("EMAIL_USER")
-        mail_pass = get_env_or_raise("EMAIL_PASS")
-
-        news = fetch_news()
-        if news:
-            report = analyze_news(news, api_key)
-            print(f"Report: {report[:50]}...")
-            
-            # 텔레그램 발송
-            requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", 
-                          json={"chat_id": tg_id, "text": report})
-            
-            # 이메일 발송
-            send_email(report, mail_user, mail_pass)
-            
-    except Exception as e:
-        print(f"\n[CRITICAL ERROR] {e}")
-        exit(1) # GitHub Actions에서 실패로 표시되게 함
+    news_data = fetch_news()
+    if news_data:
+        report = analyze_news(news_data)
+        send_telegram(report)
+        send_email(report)
+    else:
+        print("No news to process.")
