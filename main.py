@@ -24,34 +24,37 @@ def analyze_news(news_text):
     api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
     if not api_key: return "ERROR: API KEY IS EMPTY"
 
-    # 1. 사용 가능한 모델 목록 가져오기 (디스커버리 로직)
+    # 1. 사용 가능한 모델 목록 확인
     list_url = f"https://generativelanguage.googleapis.com/v1/models?key={api_key}"
     try:
         model_list_res = requests.get(list_url)
         models_data = model_list_res.json()
+        available_models = [m['name'] for m in models_data.get('models', [])]
         
-        # 호출 가능한 'gemini' 모델 찾기
-        available_models = [m['name'] for m in models_data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
-        print(f"--- Available Models: {available_models} ---")
+        # 2. 할당량이 넉넉한 'lite' 모델을 최우선으로 선택
+        # 현재 목록에 있는 gemini-2.0-flash-lite 를 타겟으로 합니다.
+        priority_models = [
+            "models/gemini-2.0-flash-lite",
+            "models/gemini-2.5-flash-lite",
+            "models/gemini-2.0-flash",
+            "models/gemini-2.5-flash"
+        ]
         
-        if not available_models:
-            return f"ERROR: No available Gemini models found for this key. (Check AI Studio Project)"
-        
-        # 1.5 flash -> 2.0 flash -> 1.0 pro 순서로 우선순위 검색
         selected_model = ""
-        for m in ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "models/gemini-1.5-pro"]:
-            if m in available_models:
-                selected_model = m
+        for pm in priority_models:
+            if pm in available_models:
+                selected_model = pm
                 break
         
-        if not selected_model: selected_model = available_models[0] # 아무거나 첫 번째 모델 선택
+        if not selected_model:
+            selected_model = available_models[0]
+            
+        print(f"Using Model: {selected_model}")
         
-        print(f"Selected Model: {selected_model}")
-        
-        # 2. 선택된 모델로 분석 요청
+        # 3. 분석 요청
         gen_url = f"https://generativelanguage.googleapis.com/v1/{selected_model}:generateContent?key={api_key}"
         payload = {
-            "contents": [{"parts": [{"text": f"뉴스 요약 및 영어표현 3개 정리해줘:\n{news_text}"}]}]
+            "contents": [{"parts": [{"text": f"다음 뉴스를 한글 요약하고 영어 표현 3개 정리해줘:\n{news_text}"}]}]
         }
         
         response = requests.post(gen_url, json=payload, timeout=20)
@@ -68,14 +71,15 @@ def send_telegram(content):
     chat_id = "".join(os.environ.get("TELEGRAM_CHAT_ID", "").split())
     if not token or not chat_id: return
     try:
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": content})
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                      json={"chat_id": chat_id, "text": content})
     except: pass
 
 def send_email(content):
     user = "".join(os.environ.get("EMAIL_USER", "").split())
     password = "".join(os.environ.get("EMAIL_PASS", "").split())
     msg = MIMEMultipart()
-    msg['From'], msg['To'], msg['Subject'] = user, user, "[News Agent] Today's Study"
+    msg['From'], msg['To'], msg['Subject'] = user, user, "[News Agent] 오늘의 영어 뉴스"
     msg.attach(MIMEText(content, 'plain'))
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -90,10 +94,11 @@ if __name__ == "__main__":
     news_data = fetch_news()
     if news_data:
         report = analyze_news(news_data)
-        print(f"Report Result: {report[:100]}...")
-        if "ERROR" not in report: # 에러가 아닐 때만 발송
+        if "AI_API_ERROR" not in report and "SYSTEM_ERROR" not in report:
             send_telegram(report)
             send_email(report)
+            print("Process completed successfully.")
         else:
-            print("Skipping send due to AI error.")
-            send_email(f"AI 분석 실패 로그:\n{report}") # 실패 원인을 메일로 전송
+            print(f"Failed to analyze news: {report}")
+            # 실패 시 로그를 본인에게 메일로 보냅니다.
+            send_email(f"AI 분석 실패 보고:\n{report}")
