@@ -21,39 +21,40 @@ def fetch_news():
     return "\n".join(news_list)
 
 def analyze_news(news_text):
+    # API 키 로드 및 공백 제거
     api_key = "".join(os.environ.get("GEMINI_API_KEY", "").split())
     if not api_key: return "ERROR: API KEY IS EMPTY"
 
-    # 시도할 API 버전과 모델 조합 리스트
-    endpoints = [
-        ("v1beta", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-flash"),
-        ("v1beta", "gemini-1.5-flash-latest"),
-        ("v1", "gemini-1.5-flash-latest")
-    ]
-
+    # v1 정식 엔드포인트 사용
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
     headers = {'Content-Type': 'application/json'}
+    # v1 규격에 맞춘 페이로드 구조
     payload = {
-        "contents": [{"parts": [{"text": f"다음 뉴스를 한글로 요약하고 영어 표현 3개를 정리해줘:\n\n{news_text}"}]}]
+        "contents": [{
+            "parts": [{
+                "text": f"다음 뉴스를 한글로 요약하고 영어 표현 3개를 정리해줘:\n\n{news_text}"
+            }]
+        }],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 800
+        }
     }
 
-    for version, model in endpoints:
-        url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={api_key}"
-        try:
-            print(f"Trying: {version} / {model}...")
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result['candidates'][0]['content']['parts'][0]['text']
+        else:
+            # 400/404 발생 시 서버가 보내는 상세 이유를 출력합니다.
+            error_detail = response.json().get('error', {})
+            return f"AI_API_ERROR: {response.status_code} | Message: {error_detail.get('message')} | Status: {error_detail.get('status')}"
             
-            if response.status_code == 200:
-                result = response.json()
-                print(f"✅ Success with {version}/{model}!")
-                return result['candidates'][0]['content']['parts'][0]['text']
-            else:
-                print(f"❌ Failed {version}/{model}: {response.status_code}")
-        except Exception as e:
-            print(f"⚠️ Error on {version}/{model}: {str(e)}")
-            continue
-
-    return "AI_ERROR: All API combinations failed. Please check if your API Key is active at AI Studio."
+    except Exception as e:
+        return f"SYSTEM_ERROR: {str(e)}"
 
 def send_telegram(content):
     token = "".join(os.environ.get("TELEGRAM_TOKEN", "").split())
@@ -76,13 +77,12 @@ def send_email(content):
     msg.attach(MIMEText(content, 'plain'))
 
     try:
-        # 이미 검증된 587 포트 설정을 그대로 유지합니다.
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, password)
         server.sendmail(user, user, msg.as_string())
         server.quit()
-        print("Final Success: Email Sent!")
+        print("Success: Email Sent!")
     except Exception as e:
         print(f"Email Error: {e}")
 
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     news_data = fetch_news()
     if news_data:
         report = analyze_news(news_data)
-        print(f"Content Length: {len(report)} characters")
+        print(f"--- Analysis Status ---\n{report[:200]}...") # 에러 메시지 확인용
         send_telegram(report)
         send_email(report)
     else:
